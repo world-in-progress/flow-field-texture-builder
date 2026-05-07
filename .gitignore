@@ -216,3 +216,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Resources
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake-build-*/
+compile_commands.json
+include/helpers/RootDir.h
+resources/
+.vcpkg/
+vcpkg_installed/
+thirdparty/json/
+thirdparty/stb/
+
+# macOS
+.DS_Store

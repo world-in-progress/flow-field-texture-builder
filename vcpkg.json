@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "flow-field-texture-builder",
+  "version-string": "0.1.0",
+  "dependencies": [
+    {
+      "name": "gdal",
+      "default-features": false
+    },
+    "nlohmann-json",
+    "proj",
+    "stb"
+  ]
+}
