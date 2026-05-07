@@ -40,3 +40,42 @@ Release presets are available for the Python-wheel target platforms:
 
 vcpkg manifest mode installs project dependencies into `vcpkg_installed/`,
 which is intentionally ignored by git.
+
+## VSCode
+
+Install the recommended CMake Tools and C/C++ extensions. Select the matching
+CMake configure preset, then run `CMake: Configure`.
+
+CMake generates `compile_commands.json` and VSCode uses CMake Tools as the
+C/C++ configuration provider, so IntelliSense reads the same include paths as
+the real build.
+
+## Dev Container
+
+The repository includes a Linux dev container under `.devcontainer/` for
+building and testing the Linux side from macOS. It uses Ubuntu 24.04 with the
+C++ toolchain, CMake, Ninja, Python development headers, uv, Node.js, and the
+Codex CLI.
+
+The container keeps vcpkg in a named Docker volume mounted at `.vcpkg/`, so it
+does not reuse or overwrite a host macOS vcpkg checkout.
+
+If you need a proxy, export `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` on the
+host before reopening the workspace in the container. Those values are passed
+to the Docker build, the container environment, git, and npm.
+
+After the container starts, run:
+
+```sh
+.devcontainer/configure-linux.sh
+```
+
+The script selects `linux-x64-release` or `linux-arm64-release` from the
+container architecture. On Apple Silicon Docker Desktop, the default container
+architecture is usually Linux arm64.
+
+`post-create.sh` installs `@openai/codex` if `codex` is not already available.
+Authentication is still container-local; run `codex login` inside the container
+when the CLI asks for credentials. Sharing a host `~/.codex` directory with the
+container is possible, but it is intentionally not enabled by default because it
+mounts local credentials into the container.
