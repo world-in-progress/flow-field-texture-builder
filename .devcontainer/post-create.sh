@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/proxy-env.sh"
+
 VCPKG_ROOT="${VCPKG_ROOT:-${PWD}/.vcpkg}"
 NPM_PREFIX="${NPM_CONFIG_PREFIX:-${HOME}/.npm-global}"
 
@@ -48,6 +51,8 @@ install_codex_cli() {
     codex --version || true
 }
 
+apply_normalized_proxy_env
+configure_vscode_proxy_settings
 configure_proxy
 bootstrap_vcpkg
 install_codex_cli

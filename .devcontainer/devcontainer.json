@@ -3,9 +3,12 @@
   "build": {
     "dockerfile": "Dockerfile",
     "args": {
-      "HTTP_PROXY": "${localEnv:HTTP_PROXY}",
-      "HTTPS_PROXY": "${localEnv:HTTPS_PROXY}",
-      "NO_PROXY": "${localEnv:NO_PROXY}"
+      "LOCAL_HTTP_PROXY": "${localEnv:HTTP_PROXY}",
+      "LOCAL_HTTPS_PROXY": "${localEnv:HTTPS_PROXY}",
+      "LOCAL_NO_PROXY": "${localEnv:NO_PROXY}",
+      "LOCAL_DEVCONTAINER_HTTP_PROXY": "${localEnv:DEVCONTAINER_HTTP_PROXY}",
+      "LOCAL_DEVCONTAINER_HTTPS_PROXY": "${localEnv:DEVCONTAINER_HTTPS_PROXY}",
+      "LOCAL_DEVCONTAINER_NO_PROXY": "${localEnv:DEVCONTAINER_NO_PROXY}"
     }
   },
   "features": {
@@ -15,29 +18,36 @@
   },
   "remoteUser": "vscode",
   "updateRemoteUserUID": true,
+  "initializeCommand": "bash .devcontainer/initialize-proxy.sh",
+  "runArgs": [
+    "--env-file",
+    ".devcontainer/proxy.env"
+  ],
   "containerEnv": {
-    "HTTP_PROXY": "${localEnv:HTTP_PROXY}",
-    "HTTPS_PROXY": "${localEnv:HTTPS_PROXY}",
-    "NO_PROXY": "${localEnv:NO_PROXY}",
-    "http_proxy": "${localEnv:HTTP_PROXY}",
-    "https_proxy": "${localEnv:HTTPS_PROXY}",
-    "no_proxy": "${localEnv:NO_PROXY}",
     "VCPKG_ROOT": "${containerWorkspaceFolder}/.vcpkg",
     "NPM_CONFIG_PREFIX": "/home/vscode/.npm-global"
   },
   "remoteEnv": {
-    "PATH": "/home/vscode/.local/bin:/home/vscode/.npm-global/bin:${containerEnv:PATH}"
+    "PATH": "/home/vscode/.local/bin:/home/vscode/.npm-global/bin:${containerEnv:PATH}",
+    "HTTP_PROXY": "${containerEnv:HTTP_PROXY}",
+    "HTTPS_PROXY": "${containerEnv:HTTPS_PROXY}",
+    "NO_PROXY": "${containerEnv:NO_PROXY}",
+    "http_proxy": "${containerEnv:http_proxy}",
+    "https_proxy": "${containerEnv:https_proxy}",
+    "no_proxy": "${containerEnv:no_proxy}"
   },
   "mounts": [
     "source=flow-field-texture-builder-vcpkg,target=${containerWorkspaceFolder}/.vcpkg,type=volume"
   ],
   "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "postStartCommand": "bash .devcontainer/configure-proxy.sh",
   "customizations": {
     "vscode": {
       "settings": {
         "cmake.useCMakePresets": "always",
         "cmake.configureOnOpen": false,
         "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+        "http.useLocalProxyConfiguration": false,
         "terminal.integrated.defaultProfile.linux": "bash"
       },
       "extensions": [

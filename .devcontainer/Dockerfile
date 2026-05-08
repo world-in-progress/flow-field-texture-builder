@@ -1,18 +1,25 @@
 FROM mcr.microsoft.com/devcontainers/cpp:1-ubuntu-24.04
 
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
-ARG NO_PROXY
+ARG LOCAL_HTTP_PROXY
+ARG LOCAL_HTTPS_PROXY
+ARG LOCAL_NO_PROXY
+ARG LOCAL_DEVCONTAINER_HTTP_PROXY
+ARG LOCAL_DEVCONTAINER_HTTPS_PROXY
+ARG LOCAL_DEVCONTAINER_NO_PROXY
 
-ENV HTTP_PROXY=${HTTP_PROXY} \
-    HTTPS_PROXY=${HTTPS_PROXY} \
-    NO_PROXY=${NO_PROXY} \
-    http_proxy=${HTTP_PROXY} \
-    https_proxy=${HTTPS_PROXY} \
-    no_proxy=${NO_PROXY} \
-    DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    BASH_ENV=/usr/local/share/devcontainer/proxy-build-env.sh
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-RUN apt-get update \
+COPY proxy-env.sh proxy.env /usr/local/share/devcontainer/
+
+RUN . /usr/local/share/devcontainer/proxy-env.sh \
+    && load_proxy_env_file /usr/local/share/devcontainer/proxy.env \
+    && apply_normalized_proxy_env \
+    && write_shell_proxy_exports "${BASH_ENV}" \
+    && write_curl_config /root/.curlrc \
+    && write_curl_config /home/vscode/.curlrc vscode:vscode \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         cmake \

@@ -228,6 +228,7 @@ compile_commands.json
 include/helpers/RootDir.h
 resources/
 .vcpkg/
+.devcontainer/proxy.env
 vcpkg_installed/
 thirdparty/json/
 thirdparty/stb/

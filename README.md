@@ -60,9 +60,26 @@ Codex CLI.
 The container keeps vcpkg in a named Docker volume mounted at `.vcpkg/`, so it
 does not reuse or overwrite a host macOS vcpkg checkout.
 
-If you need a proxy, export `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` on the
-host before reopening the workspace in the container. Those values are passed
-to the Docker build, the container environment, git, and npm.
+Use VS Code's Dev Containers commands, such as `Reopen in Container` or
+`Rebuild and Reopen in Container`, to enter the container. The Dev Containers
+extension runs the setup commands automatically; the `npx @devcontainers/cli`
+command is only useful for debugging the container setup from a terminal.
+
+If you need a proxy, export the usual `HTTP_PROXY`, `HTTPS_PROXY`, and
+`NO_PROXY` values on the host before reopening the workspace in the container.
+Local loopback proxy URLs such as `http://127.0.0.1:<port>` and
+`http://localhost:<port>` are rewritten automatically to `host.docker.internal`
+for Docker Desktop. The normalized proxy is passed to the Docker build, the
+container environment, VS Code's container-scoped `http.proxy` setting, git,
+and npm. The container also sets `http.useLocalProxyConfiguration` to `false`,
+because the host-local VS Code proxy address is not valid inside Docker.
+`DEVCONTAINER_HTTP_PROXY`, `DEVCONTAINER_HTTPS_PROXY`, and
+`DEVCONTAINER_NO_PROXY` can be used as explicit overrides.
+
+If the host proxy address or port changes after the container has been
+created, run `Dev Containers: Rebuild and Reopen in Container` so Docker gets a
+fresh generated proxy environment. Container start still refreshes VS Code's
+container-scoped proxy settings automatically.
 
 After the container starts, run:
 
