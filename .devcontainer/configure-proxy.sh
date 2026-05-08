@@ -11,3 +11,5 @@ write_shell_proxy_profile() {
 apply_normalized_proxy_env
 write_shell_proxy_profile
 configure_vscode_proxy_settings
+load_git_identity_file "${SCRIPT_DIR}/git.env"
+configure_git_identity

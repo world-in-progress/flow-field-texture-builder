@@ -54,6 +54,8 @@ install_codex_cli() {
 apply_normalized_proxy_env
 configure_vscode_proxy_settings
 configure_proxy
+load_git_identity_file "${SCRIPT_DIR}/git.env"
+configure_git_identity
 bootstrap_vcpkg
 install_codex_cli
 

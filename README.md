@@ -76,6 +76,12 @@ because the host-local VS Code proxy address is not valid inside Docker.
 `DEVCONTAINER_HTTP_PROXY`, `DEVCONTAINER_HTTPS_PROXY`, and
 `DEVCONTAINER_NO_PROXY` can be used as explicit overrides.
 
+The host git identity is also synchronized automatically. During
+initialization, the dev container reads the host workspace's effective
+`git config user.name` and `git config user.email`, writes them to the ignored
+`.devcontainer/git.env`, and applies them to the container user's global git
+config during `postCreate` and `postStart`.
+
 If the host proxy address or port changes after the container has been
 created, run `Dev Containers: Rebuild and Reopen in Container` so Docker gets a
 fresh generated proxy environment. Container start still refreshes VS Code's

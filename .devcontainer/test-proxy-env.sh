@@ -108,4 +108,33 @@ grep -q '^retry = 5$' "${tmp_curlrc}"
 grep -q '^retry-all-errors$' "${tmp_curlrc}"
 rm -f "${tmp_curlrc}"
 
+tmp_git_repo="$(mktemp -d)"
+git -C "${tmp_git_repo}" init --quiet
+git -C "${tmp_git_repo}" config user.name "Dev Container User"
+git -C "${tmp_git_repo}" config user.email "devcontainer@example.com"
+assert_eq "$(read_host_git_config user.name "${tmp_git_repo}")" \
+    "Dev Container User" \
+    "reads host git user.name"
+assert_eq "$(read_host_git_config user.email "${tmp_git_repo}")" \
+    "devcontainer@example.com" \
+    "reads host git user.email"
+
+tmp_git_env="$(mktemp)"
+write_git_identity_file "${tmp_git_env}" "${tmp_git_repo}"
+unset GIT_USER_NAME GIT_USER_EMAIL
+load_git_identity_file "${tmp_git_env}"
+assert_eq "${GIT_USER_NAME}" "Dev Container User" "loads generated git user.name"
+assert_eq "${GIT_USER_EMAIL}" "devcontainer@example.com" "loads generated git user.email"
+
+tmp_git_home="$(mktemp -d)"
+HOME="${tmp_git_home}" configure_git_identity
+assert_eq "$(HOME="${tmp_git_home}" git config --global --get user.name)" \
+    "Dev Container User" \
+    "configures container git user.name"
+assert_eq "$(HOME="${tmp_git_home}" git config --global --get user.email)" \
+    "devcontainer@example.com" \
+    "configures container git user.email"
+rm -rf "${tmp_git_repo}" "${tmp_git_home}"
+rm -f "${tmp_git_env}"
+
 echo "Proxy normalization tests passed."
