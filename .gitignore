@@ -236,3 +236,11 @@ thirdparty/stb/
 
 # macOS
 .DS_Store
+
+# Agent-local planning notes. Keep durable project issues under docs/issues/.
+/findings.md
+/progress.md
+/task_plan.md
+
+# uv cache used by sandboxed local verification.
+/.uv-cache/

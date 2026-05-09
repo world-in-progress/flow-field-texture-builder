@@ -21,11 +21,10 @@
 // Sept. 21/98: Converted to Win32 - long variables.
 // Apr. 8/99: Convert to use lookup table.
 //**************************************************************
+#pragma once
 
-class GridXType 
+class GridXType
 { protected:
-	enum { Shift = 8192 } ;  // Increased from 4096 for larger grids.
-
 	struct LocateStructure { long intersection;
 									 long DataLocation; } ;
 	LocateStructure *FindPoints;
@@ -38,18 +37,23 @@ class GridXType
   
   public:
 	GridXType( const long iSize, const long nx, const long ny);
+	GridXType(const GridXType&) = delete;
+	GridXType& operator=(const GridXType&) = delete;
 	void New( const long iSize, const long nx, const long ny );
    void Sort();
 	long Search( const int i, const int j, const int n );
 
-	long x( long i) { return FindPoints[i].intersection/Shift; }
-	long y( long i) { return FindPoints[i].intersection%Shift; }
+	long x( long i) { return ny == 0 ? 0 : FindPoints[i].intersection/ny; }
+	long y( long i) { return ny == 0 ? 0 : FindPoints[i].intersection%ny; }
 	long location( const long i)  { return FindPoints[i].DataLocation; }
 	void setnext( long i, int ix, int iy )
-     { FindPoints[np].DataLocation = i;
-       FindPoints[np].intersection = (long)ix*(long)Shift+(long)iy;
+     { if( FindPoints == 0 || np >= Size || ix < 0 || iy < 0 || ix >= nx || iy >= ny ) return;
+       FindPoints[np].DataLocation = i;
+       FindPoints[np].intersection = encode(ix, iy);
        np++; }
 
+	~GridXType() { delete[] FindPoints; delete[] Lookup; }
 
-	~GridXType() { delete[] FindPoints; delete Lookup; }
+  private:
+	long encode( const int ix, const int iy ) const { return (long)ix*ny+(long)iy; }
 };

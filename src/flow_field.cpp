@@ -3,7 +3,13 @@
 //
 #include "flow_field.h"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+
 #include "cartesian3.h"
+#include "flow_field_builder.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -13,6 +19,113 @@ namespace {
 std::filesystem::path resolvePath(const std::filesystem::path& base, const std::filesystem::path& path)
 {
     return path.is_absolute() ? path : base / path;
+}
+
+struct FlowStepArrays
+{
+    std::vector<double> xs;
+    std::vector<double> ys;
+    std::vector<float> us;
+    std::vector<float> vs;
+};
+
+std::array<double, 4> computeExtent(const std::vector<double>& xs, const std::vector<double>& ys)
+{
+    const auto [minX, maxX] = std::minmax_element(xs.begin(), xs.end());
+    const auto [minY, maxY] = std::minmax_element(ys.begin(), ys.end());
+    return {*minX, *minY, *maxX, *maxY};
+}
+
+std::array<int, 2> textureSizeFromResolution(const std::vector<double>& xs, const std::vector<double>& ys, double resolution)
+{
+    if (resolution <= 0.0)
+    {
+        throw std::invalid_argument("resolution must be positive");
+    }
+    if (resolution > 65536.0)
+    {
+        throw std::invalid_argument("resolution exceeds seed texture coordinate range");
+    }
+
+    const auto extent = computeExtent(xs, ys);
+    const double dx = extent[2] - extent[0];
+    const double dy = extent[3] - extent[1];
+    const double longestSide = std::max(dx, dy);
+    if (!(longestSide > 0.0))
+    {
+        throw std::invalid_argument("flow step extent must have positive area");
+    }
+
+    const double cellSize = longestSide / resolution;
+    return {
+            std::max(1, static_cast<int>(std::ceil(dx / cellSize))),
+            std::max(1, static_cast<int>(std::ceil(dy / cellSize)))};
+}
+
+FlowStepArrays readFlowStep(
+        const std::filesystem::path& path,
+        int headingCount,
+        int columnCount,
+        const int attributeIndex[4],
+        const double boundary[4])
+{
+    std::ifstream fs(path);
+    if (!fs)
+    {
+        throw std::runtime_error("failed to open flow step file: " + path.string());
+    }
+
+    int pointCount = 0;
+    fs >> pointCount;
+    if (pointCount <= 0)
+    {
+        throw std::invalid_argument("flow step point count must be positive");
+    }
+
+    std::string heading;
+    for (int i = 0; i < headingCount; ++i)
+    {
+        fs >> heading;
+    }
+
+    FlowStepArrays arrays;
+    arrays.xs.reserve(static_cast<std::size_t>(pointCount));
+    arrays.ys.reserve(static_cast<std::size_t>(pointCount));
+    arrays.us.reserve(static_cast<std::size_t>(pointCount));
+    arrays.vs.reserve(static_cast<std::size_t>(pointCount));
+
+    double values[4] {};
+    double ignored = 0.0;
+    for (int row = 0; row < pointCount; ++row)
+    {
+        for (int column = 0; column < columnCount; ++column)
+        {
+            if (column == attributeIndex[0]) fs >> values[0];
+            else if (column == attributeIndex[1]) fs >> values[1];
+            else if (column == attributeIndex[2]) fs >> values[2];
+            else if (column == attributeIndex[3]) fs >> values[3];
+            else fs >> ignored;
+        }
+
+        if (!fs)
+        {
+            throw std::runtime_error("failed to parse flow step file: " + path.string());
+        }
+        if (values[0] < boundary[0] || values[0] > boundary[2] || values[1] < boundary[1] || values[1] > boundary[3])
+        {
+            continue;
+        }
+        arrays.xs.push_back(values[0]);
+        arrays.ys.push_back(values[1]);
+        arrays.us.push_back(static_cast<float>(values[2]));
+        arrays.vs.push_back(static_cast<float>(values[3]));
+    }
+
+    if (arrays.xs.size() < 3)
+    {
+        throw std::invalid_argument("flow step has fewer than three in-bound points");
+    }
+    return arrays;
 }
 }
 
@@ -323,7 +436,11 @@ void FlowField::buildBmpMask(int width, int height)
 
 void FlowField::closeDataSet()
 {
-    GDALClose(m_ds);
+    if (m_ds != nullptr)
+    {
+        GDALClose(m_ds);
+        m_ds = nullptr;
+    }
 }
 void FlowField::readBmpMask()
 {
@@ -335,7 +452,18 @@ void FlowField::readBmpMask()
 }
 
 FlowField::FlowField(const char* descriptionPath, Json& resultJson)
-        :m_descriptionPath(descriptionPath), m_result(resultJson)
+        :m_descriptionPath(descriptionPath),
+         m_attributeIndex {-1, -1, -1, -1},
+         m_flowVelocityRange {
+                 std::numeric_limits<double>::max(),
+                 std::numeric_limits<double>::max(),
+                 std::numeric_limits<double>::lowest(),
+                 std::numeric_limits<double>::lowest()},
+         m_ds(nullptr),
+         m_sRef(nullptr),
+         m_vectorMask(nullptr),
+         m_maskOptions(nullptr),
+         m_result(resultJson)
 {
     std::ifstream  iStream(m_descriptionPath);
     Json descriptiveJson;
@@ -364,10 +492,6 @@ FlowField::FlowField(const char* descriptionPath, Json& resultJson)
     m_boundary[3] = descriptiveJson["boundary"][3];
     m_vMask = descriptiveJson["vector_mask"];
     m_sourceSpace = descriptiveJson["source_space"];
-    std::cout << m_vMask << std::endl;
-
-    if (m_vMask.compare("") != 0)
-        m_vectorMask = createVectorMask();
 
     urlPath = "/images/";
     resultPath = (m_outputDir / "flow_field_description.json").string();
@@ -385,6 +509,13 @@ FlowField::FlowField(const char* descriptionPath, Json& resultJson)
         else if (s.compare(m_uName) == 0) m_attributeIndex[2] = count;
         else if (s.compare(m_vName) == 0) m_attributeIndex[3] = count;
         count++;
+    }
+    for (int index : m_attributeIndex)
+    {
+        if (index < 0)
+        {
+            throw std::invalid_argument("description headings must contain coordinate and velocity fields");
+        }
     }
 
     for (const auto& f: descriptiveJson["files"])
@@ -406,50 +537,7 @@ FlowField* FlowField::create(const char* descriptionPath, Json& resultJson)
 
 void FlowField::preprocess()
 {
-//        OGRSpatialReference target, source;
-//        source.importFromEPSG(2437);
-//        target.importFromEPSG(4326);
-//
-//        OGRCoordinateTransformation *poCT;
-//        poCT = OGRCreateCoordinateTransformation(&source, &target);
-
-    for (const auto& file : m_files)
-    {
-        std::cout << "==== Preprocess File " << file.in << " ====" << std::endl;
-        auto readFile = m_inputDir / file.in;
-        std::ifstream fs(readFile);
-
-        int num;
-        fs >> num;
-        double x, y, u, v, temp;
-        ScatData scat_u(num);
-        ScatData scat_v(num);
-
-        // Remove headings
-        std::string nn;
-        for (size_t i = 0; i < m_headingNum; ++i)
-            fs >> nn;
-
-        // Set scatters
-        for (size_t i = 0; i < num; ++i)
-        {
-            // Read x, y, u, v attributes
-            for (size_t j = 0; j < m_columnNum; ++j)
-            {
-                if (j == m_attributeIndex[0]) fs >> x;
-                else if (j == m_attributeIndex[1]) fs >> y;
-                else if (j == m_attributeIndex[2]) fs >> u;
-                else if (j == m_attributeIndex[3]) fs >> v;
-                else fs >> temp;
-            }
-
-            ///////////
-//                poCT->Transform(1, &y, &x);
-
-            if (x < m_boundary[0] || x > m_boundary[2] || y < m_boundary[1] || y > m_boundary[3]) continue;
-            updateFlowBoundary(u, v);
-        }
-    }
+    // Kept for old callers; raw float32 UV output no longer needs a global flow range scan.
 }
 
 void FlowField::buildProjectionTexture(int width, int height, size_t index)
@@ -576,109 +664,42 @@ void FlowField::buildProjectionTexture(int width, int height, size_t index)
 
 void FlowField::buildTextures()
 {
+    FlowFieldBuilder builder(m_outputDir);
+    XpandOptions quikgridOptions;
+    quikgridOptions.densityRatio = 350;
+    builder.setQuikgridOptions(quikgridOptions);
 
-    if (m_vectorMask)
-    {
-        std::cout << "Vector Mask is activated!" << std::endl;
-    }
     for (const auto& file : m_files)
     {
         std::cout << "==== Process File " << file.in << " ====" << std::endl;
-        auto readFile = m_inputDir / file.in;
-        std::ifstream fs(readFile);
-
-        int num;
-        fs >> num;
-        double x, y, u, v, temp;
-        ScatData scat_u(num);
-        ScatData scat_v(num);
-        ScatData scat_dv(num);
-
-        // Remove headings
-        std::string nn;
-        for (size_t i = 0; i < m_headingNum; ++i)
-            fs >> nn;
-
-        // Set scatters
-        for (size_t i = 0; i < num; ++i)
+        const auto readFile = m_inputDir / file.in;
+        auto step = readFlowStep(
+                readFile,
+                m_headingNum,
+                m_columnNum,
+                m_attributeIndex,
+                m_boundary);
+        const auto textureSize = textureSizeFromResolution(step.xs, step.ys, m_resolution);
+        builder.setTextureSize(textureSize[0], textureSize[1]);
+        if (!m_vMask.empty())
         {
-            // Read x, y, u, v attributes
-            for (size_t j = 0; j < m_columnNum; ++j)
-            {
-                if (j == m_attributeIndex[0]) fs >> x;
-                else if (j == m_attributeIndex[1]) fs >> y;
-                else if (j == m_attributeIndex[2]) fs >> u;
-                else if (j == m_attributeIndex[3]) fs >> v;
-                else fs >> temp;
-            }
-
-            if (x < m_boundary[0] || x > m_boundary[2] || y < m_boundary[1] || y > m_boundary[3]) continue;
-            x -= m_boundary[0];
-            y -= m_boundary[1];
-            scat_u.SetNext(x, y, u);
-            scat_v.SetNext(x, y, v);
-            scat_dv.SetNext(x, y, sqrt(u * u + v * v));
+            builder.setDomainFromVector(step.xs.data(), step.ys.data(), step.xs.size(), m_inputDir / m_vMask);
         }
+        else
+        {
+            builder.setDomainFromArrays(step.xs.data(), step.ys.data(), step.xs.size());
+        }
+        builder.buildUvTexture(step.us.data(), step.vs.data(), step.us.size(), file.sn);
 
-        // Set grids
-        double xMin = scat_u.xMin();
-        double xMax = scat_u.xMax();
-        double yMin = scat_u.yMin();
-        double yMax = scat_u.yMax();
-
-        double dx = xMax - xMin;
-        double dy = yMax - yMin;
-        double dl = dx > dy ? dx : dy;
-        double ds = dl / m_resolution;
-
-        int nx = dx / ds;
-        int ny = dy / ds;
-
-        SurfaceGrid grid_u(nx, ny);
-        SurfaceGrid grid_v(nx, ny);
-        SurfaceGrid grid_dv(nx, ny);
-        buildBmpMask(nx, ny);
-
-        dx = (xMax - xMin) / nx;
-        dy = (yMax - yMin) / ny;
-        double dd = dx > dy ? dx : dy;
-        for (size_t ix = 0; ix < nx; ++ix) { grid_u.xset(ix, xMin + double(ix) * dd); grid_v.xset(ix, xMin + double(ix) * dd); grid_dv.xset(ix, xMin + double(ix) * dd); }
-        for (size_t iy = 0; iy < ny; ++iy) { grid_u.yset(iy, yMin + double(iy) * dd);  grid_v.yset(iy, yMin + double(iy) * dd); grid_dv.yset(iy, yMin + double(iy) * dd); }
-
-        // Set Xpand
-        auto scanRatio = XpandScanRatio(); // 0 - 100 (16)
-        auto densityRatio = XpandDensityRatio(350); // 1 - 10000 (150)
-        auto edgeFactor = XpandEdgeFactor(); // 1 - 10000 (100)
-        Xpand(grid_u, scat_u);
-        Xpand(grid_v, scat_v);
-        Xpand(grid_dv, scat_dv);
-
-        // Write to PNG texture
-        auto textureFile = m_outputDir / ("uv_" + file.sn + ".png");
         m_result["flow_fields"].push_back(urlPath + "uv_" + file.sn + ".png");
-        auto maskFile = m_outputDir / ("mask_" + file.sn + ".png");
-        m_result["area_masks"].push_back(urlPath + "mask_" + file.sn + ".png");
-        auto poolFile = m_outputDir / ("valid_" + file.sn + ".png");
-        m_result["valid_address"].push_back(urlPath + "valid_" + file.sn + ".png");
-        std::string status;
-//            if (toTextureGRID_dv(scat_dv, grid_dv, writeFile.c_str())) status = "SUCCESSED";
-        const auto textureFileString = textureFile.string();
-        const auto maskFileString = maskFile.string();
-        const auto poolFileString = poolFile.string();
-        if (toTextureGridUv(scat_u, scat_v, grid_u, grid_v, textureFileString.c_str(), maskFileString.c_str(), poolFileString.c_str())) status = "SUCCESSED";
-        else status = "FAILED";
-        std::cout << "Texture " << file.sn << " Building finished: " << status << std::endl;
+        m_result["seed_textures"].push_back(urlPath + "seed_" + file.sn + ".png");
+        m_result["area_masks"].push_back(urlPath + "seed_" + file.sn + ".png");
+        m_result["texture_size"]["flow_field"][0] = textureSize[0];
+        m_result["texture_size"]["flow_field"][1] = textureSize[1];
+        m_result["texture_size"]["seed"][0] = textureSize[0];
+        m_result["texture_size"]["seed"][1] = textureSize[1];
+        m_result["texture_size"]["area_mask"][0] = textureSize[0];
+        m_result["texture_size"]["area_mask"][1] = textureSize[1];
+        std::cout << "Texture " << file.sn << " Building finished: SUCCESSED" << std::endl;
     }
-
-    // Fill result JSON
-    m_result["flow_boundary"]["u_min"] = m_flowVelocityRange[0];
-    m_result["flow_boundary"]["v_min"] = m_flowVelocityRange[1];
-    m_result["flow_boundary"]["u_max"] = m_flowVelocityRange[2];
-    m_result["flow_boundary"]["v_max"] = m_flowVelocityRange[3];
-
-    m_result["constraints"]["max_texture_size"] = 4096;
-    m_result["constraints"]["max_streamline_num"] = 65536 * 4;
-    m_result["constraints"]["max_segment_num"] = 64;
-    m_result["constraints"]["max_drop_rate"] = 0.1;
-    m_result["constraints"]["max_drop_rate_bump"] = 0.2;
 }
