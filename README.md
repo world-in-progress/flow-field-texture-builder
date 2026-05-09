@@ -17,8 +17,8 @@ module under `modules/quikgrid`.
 ## Build
 
 Install CMake, Ninja, and vcpkg, then configure with one of the provided
-presets. This repository expects a local vcpkg root at `.vcpkg/`, which is
-ignored by git.
+presets. The build uses `.vcpkg/` when it exists, or `VCPKG_ROOT` when vcpkg is
+installed elsewhere. The local `.vcpkg/` directory is ignored by git.
 
 Project overlay triplets live under `cmake/vcpkg-triplets`. They keep vcpkg
 dependency configuration from accidentally discovering optional system packages
@@ -27,6 +27,62 @@ during GDAL's configure step.
 ```sh
 cmake --preset macos-arm64-debug
 cmake --build --preset macos-arm64-debug
+```
+
+The Python binding is built by default with the CMake presets. During local C++
+development, import it from the CMake build tree:
+
+```sh
+PYTHONPATH=build/macos-arm64-debug/python python3 tests/python_binding_smoke.py
+```
+
+## Python Development
+
+Python development is managed with `uv`. `uv sync` installs dependencies,
+builds the native extension through `scikit-build-core`, and installs the local
+package into `.venv`:
+
+```sh
+uv sync
+```
+
+After C++ or binding source changes, `uv` should rebuild automatically from the
+configured cache keys. To force a rebuild explicitly:
+
+```sh
+uv sync --reinstall-package flow-field-texture-builder
+```
+
+Run the Python smoke test through the uv environment:
+
+```sh
+uv run python tests/python_binding_smoke.py
+```
+
+## Python Package
+
+`pyproject.toml` uses `scikit-build-core` and the same CMake/vcpkg build. The
+package build auto-selects the repository's `*-flowfield` vcpkg triplet from
+the host platform and architecture:
+
+```sh
+uv build --wheel
+```
+
+To force a specific triplet, pass `VCPKG_TARGET_TRIPLET` explicitly:
+
+```sh
+uv build --wheel \
+  -Ccmake.define.VCPKG_TARGET_TRIPLET=arm64-osx-flowfield
+```
+
+Supported release triplets live under `cmake/vcpkg-triplets`.
+
+Install the produced wheel into the Python environment that will call the
+builder:
+
+```sh
+python -m pip install dist/flow_field_texture_builder-*.whl
 ```
 
 Release presets are available for the Python-wheel target platforms:
@@ -40,6 +96,78 @@ Release presets are available for the Python-wheel target platforms:
 
 vcpkg manifest mode installs project dependencies into `vcpkg_installed/`,
 which is intentionally ignored by git.
+
+## Python Binding
+
+The Python package exposes the stateful builder directly. Domain geometry is
+set once and reused across texture builds. Each `build_uv_texture(...)` call
+accepts one model output step and writes one UV texture plus one seed texture.
+It returns `None`; paths and state are inferred from the builder object.
+
+```python
+from pathlib import Path
+
+import numpy as np
+
+from flow_field_texture_builder import FlowFieldBuilder
+
+
+xs = np.asarray(model_xs, dtype=np.float64)
+ys = np.asarray(model_ys, dtype=np.float64)
+us = np.asarray(step_u, dtype=np.float32)
+vs = np.asarray(step_v, dtype=np.float32)
+
+builder = FlowFieldBuilder("result")
+try:
+    builder.set_texture_size(1024, 1024)
+
+    # Use the point extent directly.
+    builder.set_domain_from_arrays(xs, ys)
+
+    # Or use vector data as the domain mask. The extent still comes from xs/ys.
+    # Supported vector formats depend on GDAL, for example .shp or .geojson.
+    # builder.set_domain_from_vector(xs, ys, "domain.geojson")
+
+    # Optional. Defaults are valid if this is not called.
+    builder.set_quikgrid_options(
+        scan_ratio=16,
+        density_ratio=150,
+        edge_factor=100,
+        undefined_value=-99999.0,
+        sample=1,
+    )
+
+    builder.build_uv_texture(us, vs, "step_0001")
+
+    uv_path = Path(builder.uv_texture_path("step_0001"))
+    seed_path = Path(builder.seed_texture_path("step_0001"))
+    texture_size = builder.texture_size
+    domain_extent = builder.domain_extent
+finally:
+    builder.close()
+```
+
+Input arrays are one-dimensional and must have matching lengths. The wrapper
+passes `xs` and `ys` as contiguous `float64` arrays. `us` and `vs` are converted
+to contiguous `float32` arrays at the Python FFI boundary, so callers may pass
+`float64` velocity arrays when that is more convenient.
+
+`output_name` must be a file stem such as `step_0001`; directory components and
+absolute paths are rejected. Output files are written under the builder output
+directory as:
+
+- `uv_<output_name>.png`
+- `seed_<output_name>.png`
+
+The configured texture size is `(width, height)`. The UV PNG is RGBA8 with
+physical size `(width * 2, height)`: each grid cell uses two adjacent RGBA
+pixels, the first containing the raw little-endian `float32` bytes for `u` and
+the second containing the raw little-endian `float32` bytes for `v`. There is no
+`flow_boundary` normalization step.
+
+The seed PNG is RGBA8 with physical size `(width, height)`. It stores the seed
+coordinate as two unsigned 16-bit values split across RGBA bytes:
+`R/G -> x`, `B/A -> y`.
 
 ## VSCode
 

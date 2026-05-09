@@ -22,8 +22,7 @@
 // Sept. 21/98: Converted over to Win32 - long variables
 // Apr. 9-12/99: Convert to use lookup tables.
 //******************************************************
-#include <stdlib.h>
-#include <stdio.h>
+#include <algorithm>
 //#include "assert.h"
 #include "gridxtyp.h"
 
@@ -34,8 +33,13 @@ GridXType::GridXType(const long iSize, const long ax, const long ay)
   np = 0; 
   FindPoints = 0;
   Lookup = 0;
+  LookupSize = 0;
   PreviousSearch = -1;  
-  if( Size == 0 ) return;
+  if( Size <= 0 || nx <= 0 || ny <= 0 )
+  {
+    Size = 0;
+    return;
+  }
   //assert( (Size > 0));
   FindPoints = new LocateStructure[Size];
   //assert( FindPoints != 0 );
@@ -55,7 +59,12 @@ void GridXType::New( const long iSize, const long ax, const long ay )
   if( Lookup != 0 ) delete[] Lookup;
   Lookup = 0;
   Size = iSize;
-  if( Size == 0 ) return;
+  LookupSize = 0;
+  if( Size <= 0 || nx <= 0 || ny <= 0 )
+  {
+    Size = 0;
+    return;
+  }
   //assert( (Size > 0) );
   FindPoints = new LocateStructure[iSize];
   //assert( FindPoints != 0);
@@ -64,13 +73,18 @@ void GridXType::New( const long iSize, const long ax, const long ay )
   //assert( Lookup != 0 );
 }
 
-static int LocateInitSort( const void *a, const void *b )
-{ return ( *( long *)a - *( long *)b ); }
-
 void GridXType::Sort()
 {
- static long i, ix, iy, ixiy, ixiyold, ixiyLook;
- qsort( FindPoints, np, sizeof(FindPoints[0]), LocateInitSort);
+ if( Lookup != 0 )
+ {
+   std::fill( Lookup, Lookup + LookupSize, -1L );
+ }
+ if( FindPoints == 0 || Lookup == 0 || LookupSize <= 0 || np <= 0 ) return;
+
+ std::sort( FindPoints, FindPoints + np, []( const LocateStructure& a, const LocateStructure& b )
+ {
+   return a.intersection < b.intersection;
+ });
 
  // Build lookup table. -1 means no data points attached to that node.
  //char string[30];
@@ -78,18 +92,18 @@ void GridXType::Sort()
  //MessageBeep(MB_ICONQUESTION);
  //MessageBox( NULL, string, "QuikGrid",
  //		  MB_ICONINFORMATION|MB_OK|MB_TASKMODAL);
- for( i = 0; i < LookupSize; i++ ) { Lookup[i] = -1; }
-
- ixiyold = -1;
- for( i = 0; i < np; i++ )
+ long ixiyold = -1;
+ for( long i = 0; i < np; i++ )
  {
-	 ixiy = FindPoints[i].intersection;
+	 long ixiy = FindPoints[i].intersection;
 	 if( ixiy == ixiyold ) continue;
 	 ixiyold = ixiy;
-	 ix = ixiy/Shift;
-	 iy = ixiy%Shift;
-	 ixiyLook = iy*nx + ix;
+	 if( ny == 0 ) continue;
+	 long ix = ixiy/ny;
+	 long iy = ixiy%ny;
+	 long ixiyLook = iy*nx + ix;
 	 //assert( ixiyLook >= 0 && ixiyLook < LookupSize );
+	 if( ixiyLook < 0 || ixiyLook >= LookupSize ) continue;
 	 Lookup[ ixiyLook] = i ;
  }
 
@@ -99,14 +113,15 @@ long GridXType::Search( const int i, const int j, const int n )
 { // returns location of n th point belonging to intersection i,j
 
  // Here is the new code
- static long ixiy, newij, result;
- ixiy = (long)j*nx + (long)i;
+ if( Lookup == 0 || FindPoints == 0 || LookupSize <= 0 || i < 0 || j < 0 || n < 0 ) return -1;
+ long ixiy = (long)j*nx + (long)i;
  //assert( ixiy >= 0 && ixiy < LookupSize );
- result = Lookup[ixiy];
+ if( ixiy < 0 || ixiy >= LookupSize ) return -1;
+ long result = Lookup[ixiy];
 
  if( result == -1 ) return -1;
  //assert( result >= 0 && result < np ) ;
- newij = (long)i*(long)Shift+(long)j;
+ long newij = (long)i*ny+(long)j;
  //assert( newij == FindPoints[result].intersection );
  
  result += n;

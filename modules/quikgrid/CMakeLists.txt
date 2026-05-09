@@ -1,5 +1,8 @@
 add_library(quikgrid STATIC)
 add_library(quikgrid::quikgrid ALIAS quikgrid)
+set_target_properties(quikgrid PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+)
 
 target_sources(quikgrid PRIVATE
         contour.cpp
@@ -7,6 +10,7 @@ target_sources(quikgrid PRIVATE
         scatdata.cpp
         surfgrid.cpp
         xpand.cpp
+        xpand_context.cpp
 )
 
 target_include_directories(quikgrid SYSTEM PUBLIC
