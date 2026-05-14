@@ -36,6 +36,8 @@ _LIB.ffb_set_output_directory.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
 _LIB.ffb_set_output_directory.restype = ctypes.c_int
 _LIB.ffb_set_texture_size.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
 _LIB.ffb_set_texture_size.restype = ctypes.c_int
+_LIB.ffb_set_projection_texture_size.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+_LIB.ffb_set_projection_texture_size.restype = ctypes.c_int
 _LIB.ffb_set_quikgrid_options.argtypes = [
     ctypes.c_void_p,
     ctypes.c_int,
@@ -50,6 +52,7 @@ _LIB.ffb_set_domain_from_arrays.argtypes = [
     ctypes.POINTER(ctypes.c_double),
     ctypes.POINTER(ctypes.c_double),
     ctypes.c_size_t,
+    ctypes.c_int,
 ]
 _LIB.ffb_set_domain_from_arrays.restype = ctypes.c_int
 _LIB.ffb_set_domain_from_vector.argtypes = [
@@ -58,6 +61,7 @@ _LIB.ffb_set_domain_from_vector.argtypes = [
     ctypes.POINTER(ctypes.c_double),
     ctypes.c_size_t,
     ctypes.c_char_p,
+    ctypes.c_int,
 ]
 _LIB.ffb_set_domain_from_vector.restype = ctypes.c_int
 _LIB.ffb_build_uv_texture.argtypes = [
@@ -68,12 +72,24 @@ _LIB.ffb_build_uv_texture.argtypes = [
     ctypes.c_char_p,
 ]
 _LIB.ffb_build_uv_texture.restype = ctypes.c_int
+_LIB.ffb_build_projection_texture.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_char_p,
+    ctypes.c_char_p,
+]
+_LIB.ffb_build_projection_texture.restype = ctypes.c_int
 _LIB.ffb_texture_width.argtypes = [ctypes.c_void_p]
 _LIB.ffb_texture_width.restype = ctypes.c_int
 _LIB.ffb_texture_height.argtypes = [ctypes.c_void_p]
 _LIB.ffb_texture_height.restype = ctypes.c_int
+_LIB.ffb_projection_texture_width.argtypes = [ctypes.c_void_p]
+_LIB.ffb_projection_texture_width.restype = ctypes.c_int
+_LIB.ffb_projection_texture_height.argtypes = [ctypes.c_void_p]
+_LIB.ffb_projection_texture_height.restype = ctypes.c_int
 _LIB.ffb_domain_extent.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
 _LIB.ffb_domain_extent.restype = ctypes.c_int
+_LIB.ffb_projection_extent.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
+_LIB.ffb_projection_extent.restype = ctypes.c_int
 
 
 def _bytes_path(path: str | pathlib.Path) -> bytes:
@@ -137,6 +153,9 @@ class FlowFieldBuilder:
     def set_texture_size(self, width: int, height: int) -> None:
         _check(_LIB.ffb_set_texture_size(self._require_handle(), width, height))
 
+    def set_projection_texture_size(self, width: int, height: int) -> None:
+        _check(_LIB.ffb_set_projection_texture_size(self._require_handle(), width, height))
+
     def set_quikgrid_options(
         self,
         scan_ratio: int = 16,
@@ -156,7 +175,7 @@ class FlowFieldBuilder:
             )
         )
 
-    def set_domain_from_arrays(self, xs: Any, ys: Any) -> None:
+    def set_domain_from_arrays(self, xs: Any, ys: Any, source_epsg: int | None = None) -> None:
         xs_array, ys_array = self._domain_arrays(xs, ys)
         _check(
             _LIB.ffb_set_domain_from_arrays(
@@ -164,10 +183,17 @@ class FlowFieldBuilder:
                 xs_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
                 ys_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
                 xs_array.size,
+                0 if source_epsg is None else source_epsg,
             )
         )
 
-    def set_domain_from_vector(self, xs: Any, ys: Any, vector_path: str | pathlib.Path) -> None:
+    def set_domain_from_vector(
+        self,
+        xs: Any,
+        ys: Any,
+        vector_path: str | pathlib.Path,
+        source_epsg: int | None = None,
+    ) -> None:
         xs_array, ys_array = self._domain_arrays(xs, ys)
         _check(
             _LIB.ffb_set_domain_from_vector(
@@ -176,6 +202,7 @@ class FlowFieldBuilder:
                 ys_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
                 xs_array.size,
                 _bytes_path(vector_path),
+                0 if source_epsg is None else source_epsg,
             )
         )
 
@@ -195,15 +222,38 @@ class FlowFieldBuilder:
             )
         )
 
+    def build_projection_texture(self, target: str | int, output_name: str | None = None) -> None:
+        target_name = str(target)
+        output_name = target_name if output_name is None else output_name
+        _validate_output_name(output_name)
+        _check(
+            _LIB.ffb_build_projection_texture(
+                self._require_handle(),
+                target_name.encode("utf-8"),
+                output_name.encode("utf-8"),
+            )
+        )
+
     @property
     def texture_size(self) -> tuple[int, int]:
         handle = self._require_handle()
         return (_LIB.ffb_texture_width(handle), _LIB.ffb_texture_height(handle))
 
     @property
+    def projection_texture_size(self) -> tuple[int, int]:
+        handle = self._require_handle()
+        return (_LIB.ffb_projection_texture_width(handle), _LIB.ffb_projection_texture_height(handle))
+
+    @property
     def domain_extent(self) -> tuple[float, float, float, float]:
         output = (ctypes.c_double * 4)()
         _check(_LIB.ffb_domain_extent(self._require_handle(), output))
+        return (output[0], output[1], output[2], output[3])
+
+    @property
+    def projection_extent(self) -> tuple[float, float, float, float]:
+        output = (ctypes.c_double * 4)()
+        _check(_LIB.ffb_projection_extent(self._require_handle(), output))
         return (output[0], output[1], output[2], output[3])
 
     def uv_texture_path(self, output_name: str) -> str:
@@ -213,6 +263,10 @@ class FlowFieldBuilder:
     def seed_texture_path(self, output_name: str) -> str:
         _validate_output_name(output_name)
         return str(self._output_directory / f"seed_{output_name}.png")
+
+    def projection_texture_path(self, output_name: str) -> str:
+        _validate_output_name(output_name)
+        return str(self._output_directory / f"projection_{output_name}.png")
 
     @staticmethod
     def _domain_arrays(xs: Any, ys: Any) -> tuple[np.ndarray[Any, np.dtype[Any]], np.ndarray[Any, np.dtype[Any]]]:

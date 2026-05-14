@@ -7,17 +7,34 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include <gdal_alg.h>
 #include <gdal_priv.h>
 #include <ogrsf_frmts.h>
 
+#include "cartesian3.h"
 #include "stb_image_write.h"
 
 namespace {
 
 constexpr int kMaxSeedTextureDimension = 65536;
+constexpr double kPi = 3.14159265358979323846;
+
+enum class ProjectionTargetType
+{
+    Mapbox,
+    Cesium,
+    Epsg
+};
+
+struct ProjectionTarget
+{
+    ProjectionTargetType type = ProjectionTargetType::Epsg;
+    int epsg = 4326;
+    int components = 2;
+};
 
 struct GdalDatasetDeleter
 {
@@ -31,6 +48,19 @@ struct GdalDatasetDeleter
 };
 
 using GdalDatasetPtr = std::unique_ptr<GDALDataset, GdalDatasetDeleter>;
+
+struct CoordinateTransformationDeleter
+{
+    void operator()(OGRCoordinateTransformation* transformation) const
+    {
+        if (transformation != nullptr)
+        {
+            OGRCoordinateTransformation::DestroyCT(transformation);
+        }
+    }
+};
+
+using CoordinateTransformationPtr = std::unique_ptr<OGRCoordinateTransformation, CoordinateTransformationDeleter>;
 
 void validateOutputName(const std::string& outputName)
 {
@@ -65,6 +95,101 @@ std::array<double, 4> computeExtent(const std::vector<double>& xs, const std::ve
     const auto [minX, maxX] = std::minmax_element(xs.begin(), xs.end());
     const auto [minY, maxY] = std::minmax_element(ys.begin(), ys.end());
     return {*minX, *minY, *maxX, *maxY};
+}
+
+ProjectionTarget parseProjectionTarget(const std::string& target)
+{
+    if (target == "mapbox")
+    {
+        return {ProjectionTargetType::Mapbox, 4326, 2};
+    }
+    if (target == "cesium")
+    {
+        return {ProjectionTargetType::Cesium, 4326, 3};
+    }
+    if (target.empty())
+    {
+        throw std::invalid_argument("projection target must not be empty");
+    }
+
+    std::size_t parsedCharacters = 0;
+    const int epsg = std::stoi(target, &parsedCharacters);
+    if (parsedCharacters != target.size() || epsg <= 0)
+    {
+        throw std::invalid_argument("projection target must be 'mapbox', 'cesium', or an EPSG code");
+    }
+    return {ProjectionTargetType::Epsg, epsg, 2};
+}
+
+void importEpsg(OGRSpatialReference& reference, int epsg, const char* label)
+{
+    if (epsg <= 0 || reference.importFromEPSG(epsg) != OGRERR_NONE)
+    {
+        throw std::invalid_argument(std::string("invalid ") + label + " EPSG code");
+    }
+    reference.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
+}
+
+CoordinateTransformationPtr createTransformation(int sourceEpsg, const ProjectionTarget& target)
+{
+    OGRSpatialReference sourceReference;
+    OGRSpatialReference targetReference;
+    importEpsg(sourceReference, sourceEpsg, "source");
+    importEpsg(targetReference, target.epsg, "target");
+
+    auto* transformation = OGRCreateCoordinateTransformation(&sourceReference, &targetReference);
+    if (transformation == nullptr)
+    {
+        throw std::runtime_error("failed to create projection transformation");
+    }
+    return CoordinateTransformationPtr(transformation);
+}
+
+void transformCoordinate(
+        OGRCoordinateTransformation& transformation,
+        ProjectionTargetType targetType,
+        double& x,
+        double& y,
+        double& z)
+{
+    if (!transformation.Transform(1, &x, &y))
+    {
+        throw std::runtime_error("failed to transform projection coordinate");
+    }
+
+    if (targetType == ProjectionTargetType::Mapbox)
+    {
+        x = (180.0 + x) / 360.0;
+        y = (180.0 - (180.0 / kPi * std::log(std::tan(kPi / 4.0 + y * kPi / 360.0)))) / 360.0;
+        z = 0.0;
+    }
+    else if (targetType == ProjectionTargetType::Cesium)
+    {
+        Cartesian3 cartesian;
+        Cartesian3::fromDegrees(x, y, 0.0, &cartesian);
+        x = cartesian.x;
+        y = cartesian.y;
+        z = cartesian.z;
+    }
+    else
+    {
+        z = 0.0;
+    }
+
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z))
+    {
+        throw std::runtime_error("projection coordinate is not finite");
+    }
+}
+
+void packProjectedComponents(double x, double y, double z, int components, unsigned char* target)
+{
+    packFloat(static_cast<float>(x), target);
+    packFloat(static_cast<float>(y), target + 4U);
+    if (components == 3)
+    {
+        packFloat(static_cast<float>(z), target + 8U);
+    }
 }
 
 } // namespace
@@ -107,6 +232,28 @@ void FlowFieldBuilder::setTextureSize(int width, int height)
     }
 }
 
+void FlowFieldBuilder::setProjectionTextureSize(int width, int height)
+{
+    if (width <= 0 || height <= 0)
+    {
+        throw std::invalid_argument("projection texture size must be positive");
+    }
+    if (width > std::numeric_limits<int>::max() / 3)
+    {
+        throw std::invalid_argument("projection texture width is too large");
+    }
+
+    m_projectionTextureWidth = width;
+    m_projectionTextureHeight = height;
+}
+
+void FlowFieldBuilder::setSourceEpsg(int epsg)
+{
+    OGRSpatialReference reference;
+    importEpsg(reference, epsg, "source");
+    m_sourceEpsg = epsg;
+}
+
 void FlowFieldBuilder::setQuikgridOptions(const XpandOptions& options)
 {
     m_options = options;
@@ -126,6 +273,12 @@ void FlowFieldBuilder::setDomainFromArrays(const double* xs, const double* ys, s
     {
         rebuildDomain();
     }
+}
+
+void FlowFieldBuilder::setDomainFromArrays(const double* xs, const double* ys, std::size_t count, int sourceEpsg)
+{
+    setDomainFromArrays(xs, ys, count);
+    setSourceEpsg(sourceEpsg);
 }
 
 void FlowFieldBuilder::setDomainFromVector(
@@ -149,6 +302,17 @@ void FlowFieldBuilder::setDomainFromVector(
     }
 }
 
+void FlowFieldBuilder::setDomainFromVector(
+        const double* xs,
+        const double* ys,
+        std::size_t count,
+        const std::filesystem::path& vectorPath,
+        int sourceEpsg)
+{
+    setDomainFromVector(xs, ys, count, vectorPath);
+    setSourceEpsg(sourceEpsg);
+}
+
 void FlowFieldBuilder::buildUvTexture(
         const float* us,
         const float* vs,
@@ -170,6 +334,74 @@ void FlowFieldBuilder::buildUvTexture(
     writeTextures(uGrid, vGrid, outputName);
 }
 
+void FlowFieldBuilder::buildProjectionTexture(const std::string& target, const std::string& outputName)
+{
+    validateReadyToBuildProjection(target, outputName);
+
+    const auto projectionTarget = parseProjectionTarget(target);
+    auto transformation = createTransformation(m_sourceEpsg, projectionTarget);
+
+    std::array<std::array<double, 2>, 4> corners {{
+            {m_domainExtent[0], m_domainExtent[1]},
+            {m_domainExtent[0], m_domainExtent[3]},
+            {m_domainExtent[2], m_domainExtent[1]},
+            {m_domainExtent[2], m_domainExtent[3]},
+    }};
+    m_projectionExtent = {
+            std::numeric_limits<double>::max(),
+            std::numeric_limits<double>::max(),
+            std::numeric_limits<double>::lowest(),
+            std::numeric_limits<double>::lowest(),
+    };
+    for (auto& corner : corners)
+    {
+        double z = 0.0;
+        transformCoordinate(*transformation, projectionTarget.type, corner[0], corner[1], z);
+        m_projectionExtent[0] = std::min(m_projectionExtent[0], corner[0]);
+        m_projectionExtent[1] = std::min(m_projectionExtent[1], corner[1]);
+        m_projectionExtent[2] = std::max(m_projectionExtent[2], corner[0]);
+        m_projectionExtent[3] = std::max(m_projectionExtent[3], corner[1]);
+    }
+
+    transformation = createTransformation(m_sourceEpsg, projectionTarget);
+
+    const std::size_t logicalWidth = static_cast<std::size_t>(m_projectionTextureWidth);
+    const std::size_t logicalHeight = static_cast<std::size_t>(m_projectionTextureHeight);
+    const std::size_t components = static_cast<std::size_t>(projectionTarget.components);
+    std::vector<unsigned char> texture(logicalWidth * logicalHeight * components * 4U, 0U);
+
+    const double dx = (m_domainExtent[2] - m_domainExtent[0]) / static_cast<double>(m_projectionTextureWidth);
+    const double dy = (m_domainExtent[3] - m_domainExtent[1]) / static_cast<double>(m_projectionTextureHeight);
+    for (int yIndex = 0; yIndex < m_projectionTextureHeight; ++yIndex)
+    {
+        for (int xIndex = 0; xIndex < m_projectionTextureWidth; ++xIndex)
+        {
+            double x = m_domainExtent[0] + 0.5 * dx + static_cast<double>(xIndex) * dx;
+            double y = m_domainExtent[1] + 0.5 * dy + static_cast<double>(yIndex) * dy;
+            double z = 0.0;
+            transformCoordinate(*transformation, projectionTarget.type, x, y, z);
+
+            const std::size_t pngRow = static_cast<std::size_t>(m_projectionTextureHeight - yIndex - 1);
+            const std::size_t base = pngRow * logicalWidth * components * 4U
+                    + static_cast<std::size_t>(xIndex) * components * 4U;
+            packProjectedComponents(x, y, z, projectionTarget.components, texture.data() + base);
+        }
+    }
+
+    std::filesystem::create_directories(m_outputDirectory);
+    const auto outputPath = projectionTexturePath(outputName).string();
+    if (!stbi_write_png(
+                outputPath.c_str(),
+                m_projectionTextureWidth * projectionTarget.components,
+                m_projectionTextureHeight,
+                4,
+                texture.data(),
+                0))
+    {
+        throw std::runtime_error("failed to write projection texture");
+    }
+}
+
 std::filesystem::path FlowFieldBuilder::uvTexturePath(const std::string& outputName) const
 {
     validateOutputName(outputName);
@@ -180,6 +412,12 @@ std::filesystem::path FlowFieldBuilder::seedTexturePath(const std::string& outpu
 {
     validateOutputName(outputName);
     return m_outputDirectory / ("seed_" + outputName + ".png");
+}
+
+std::filesystem::path FlowFieldBuilder::projectionTexturePath(const std::string& outputName) const
+{
+    validateOutputName(outputName);
+    return m_outputDirectory / ("projection_" + outputName + ".png");
 }
 
 void FlowFieldBuilder::setDomainArrays(const double* xs, const double* ys, std::size_t count)
@@ -388,6 +626,31 @@ void FlowFieldBuilder::validateReadyToBuild(std::size_t count, const std::string
     if (count != m_xs.size())
     {
         throw std::invalid_argument("velocity count must match domain point count");
+    }
+}
+
+void FlowFieldBuilder::validateReadyToBuildProjection(const std::string& target, const std::string& outputName) const
+{
+    validateOutputName(outputName);
+    if (target.empty())
+    {
+        throw std::invalid_argument("projection target must not be empty");
+    }
+    if (m_outputDirectory.empty())
+    {
+        throw std::logic_error("output directory is not set");
+    }
+    if (m_sourceEpsg <= 0)
+    {
+        throw std::logic_error("source EPSG is not set");
+    }
+    if (m_projectionTextureWidth <= 0 || m_projectionTextureHeight <= 0)
+    {
+        throw std::logic_error("projection texture size is not set");
+    }
+    if (m_domainMode == DomainMode::None || m_xs.empty())
+    {
+        throw std::logic_error("domain is not set");
     }
 }
 

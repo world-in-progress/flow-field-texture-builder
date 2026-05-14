@@ -164,6 +164,35 @@ void testVectorDomainHole(const std::filesystem::path& directory)
     }
 }
 
+void testProjectionTexture(const std::filesystem::path& directory)
+{
+    const std::array<double, 4> xs {0.0, 1.0, 0.0, 1.0};
+    const std::array<double, 4> ys {0.0, 0.0, 1.0, 1.0};
+
+    FlowFieldBuilder builder(directory);
+    builder.setDomainFromArrays(xs.data(), ys.data(), xs.size(), 4326);
+    builder.setProjectionTextureSize(2, 1);
+    builder.buildProjectionTexture("4326", "projection_epsg");
+
+    Image projection(builder.projectionTexturePath("projection_epsg"));
+    if (projection.width != 4 || projection.height != 1)
+    {
+        std::cerr << "unexpected projection texture size: "
+                  << projection.width << "x" << projection.height << '\n';
+        std::exit(1);
+    }
+    expectNear(unpackFloat(projection.pixel(0, 0)), 0.25f, "projection first x");
+    expectNear(unpackFloat(projection.pixel(1, 0)), 0.5f, "projection first y");
+    expectNear(unpackFloat(projection.pixel(2, 0)), 0.75f, "projection second x");
+    expectNear(unpackFloat(projection.pixel(3, 0)), 0.5f, "projection second y");
+
+    const auto& extent = builder.projectionExtent();
+    expectNear(static_cast<float>(extent[0]), 0.0f, "projection extent min x");
+    expectNear(static_cast<float>(extent[1]), 0.0f, "projection extent min y");
+    expectNear(static_cast<float>(extent[2]), 1.0f, "projection extent max x");
+    expectNear(static_cast<float>(extent[3]), 1.0f, "projection extent max y");
+}
+
 void testValidation(const std::filesystem::path& directory)
 {
     const std::array<double, 4> xs {0.0, 1.0, 0.0, 1.0};
@@ -249,6 +278,7 @@ int main()
     const auto directory = outputDir();
     testRawSingleStepBuild(directory);
     testVectorDomainHole(directory);
+    testProjectionTexture(directory);
     testValidation(directory);
     return 0;
 }

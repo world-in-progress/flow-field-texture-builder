@@ -120,13 +120,14 @@ vs = np.asarray(step_v, dtype=np.float32)
 builder = FlowFieldBuilder("result")
 try:
     builder.set_texture_size(1024, 1024)
+    builder.set_projection_texture_size(1024, 2048)
 
     # Use the point extent directly.
-    builder.set_domain_from_arrays(xs, ys)
+    builder.set_domain_from_arrays(xs, ys, source_epsg=4326)
 
     # Or use vector data as the domain mask. The extent still comes from xs/ys.
     # Supported vector formats depend on GDAL, for example .shp or .geojson.
-    # builder.set_domain_from_vector(xs, ys, "domain.geojson")
+    # builder.set_domain_from_vector(xs, ys, "domain.geojson", source_epsg=4326)
 
     # Optional. Defaults are valid if this is not called.
     builder.set_quikgrid_options(
@@ -138,11 +139,17 @@ try:
     )
 
     builder.build_uv_texture(us, vs, "step_0001")
+    builder.build_projection_texture("mapbox")
+    builder.build_projection_texture("cesium")
+    builder.build_projection_texture(3857, "web_mercator")
 
     uv_path = Path(builder.uv_texture_path("step_0001"))
     seed_path = Path(builder.seed_texture_path("step_0001"))
+    mapbox_projection_path = Path(builder.projection_texture_path("mapbox"))
     texture_size = builder.texture_size
+    projection_texture_size = builder.projection_texture_size
     domain_extent = builder.domain_extent
+    projection_extent = builder.projection_extent
 finally:
     builder.close()
 ```
@@ -152,12 +159,17 @@ passes `xs` and `ys` as contiguous `float64` arrays. `us` and `vs` are converted
 to contiguous `float32` arrays at the Python FFI boundary, so callers may pass
 `float64` velocity arrays when that is more convenient.
 
+`source_epsg` identifies the CRS of the `xs`/`ys` coordinates. Projection
+texture builds require it, so pass it when setting the domain with
+`set_domain_from_arrays(...)` or `set_domain_from_vector(...)`.
+
 `output_name` must be a file stem such as `step_0001`; directory components and
 absolute paths are rejected. Output files are written under the builder output
 directory as:
 
 - `uv_<output_name>.png`
 - `seed_<output_name>.png`
+- `projection_<output_name>.png`
 
 The configured texture size is `(width, height)`. The UV PNG is RGBA8 with
 physical size `(width * 2, height)`: each grid cell uses two adjacent RGBA
@@ -168,6 +180,14 @@ the second containing the raw little-endian `float32` bytes for `v`. There is no
 The seed PNG is RGBA8 with physical size `(width, height)`. It stores the seed
 coordinate as two unsigned 16-bit values split across RGBA bytes:
 `R/G -> x`, `B/A -> y`.
+
+Projection textures use their own size from
+`set_projection_texture_size(width, height)`. `build_projection_texture(...)`
+accepts `"mapbox"`, `"cesium"`, or an EPSG integer/string target. Mapbox and
+EPSG targets write two packed `float32` components per logical cell, so the PNG
+physical size is `(width * 2, height)`. Cesium writes ECEF `x/y/z`, so its PNG
+physical size is `(width * 3, height)`. `projection_extent` reports the latest
+projected domain extent after a projection texture build.
 
 ## VSCode
 

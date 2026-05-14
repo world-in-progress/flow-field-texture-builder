@@ -123,6 +123,13 @@ FFB_API int ffb_set_texture_size(void* handle, int width, int height)
     });
 }
 
+FFB_API int ffb_set_projection_texture_size(void* handle, int width, int height)
+{
+    return runChecked([&] {
+        checkedHandle(handle)->setProjectionTextureSize(width, height);
+    });
+}
+
 FFB_API int ffb_set_quikgrid_options(
         void* handle,
         int scanRatio,
@@ -146,10 +153,19 @@ FFB_API int ffb_set_domain_from_arrays(
         void* handle,
         const double* xs,
         const double* ys,
-        std::size_t count)
+        std::size_t count,
+        int sourceEpsg)
 {
     return runChecked([&] {
-        checkedHandle(handle)->setDomainFromArrays(xs, ys, count);
+        auto* builder = checkedHandle(handle);
+        if (sourceEpsg > 0)
+        {
+            builder->setDomainFromArrays(xs, ys, count, sourceEpsg);
+        }
+        else
+        {
+            builder->setDomainFromArrays(xs, ys, count);
+        }
     });
 }
 
@@ -158,10 +174,20 @@ FFB_API int ffb_set_domain_from_vector(
         const double* xs,
         const double* ys,
         std::size_t count,
-        const char* vectorPath)
+        const char* vectorPath,
+        int sourceEpsg)
 {
     return runChecked([&] {
-        checkedHandle(handle)->setDomainFromVector(xs, ys, count, checkedPath(vectorPath, "vector_path"));
+        auto* builder = checkedHandle(handle);
+        const auto path = checkedPath(vectorPath, "vector_path");
+        if (sourceEpsg > 0)
+        {
+            builder->setDomainFromVector(xs, ys, count, path, sourceEpsg);
+        }
+        else
+        {
+            builder->setDomainFromVector(xs, ys, count, path);
+        }
     });
 }
 
@@ -174,6 +200,18 @@ FFB_API int ffb_build_uv_texture(
 {
     return runChecked([&] {
         checkedHandle(handle)->buildUvTexture(us, vs, count, checkedString(outputName, "output_name"));
+    });
+}
+
+FFB_API int ffb_build_projection_texture(
+        void* handle,
+        const char* target,
+        const char* outputName)
+{
+    return runChecked([&] {
+        checkedHandle(handle)->buildProjectionTexture(
+                checkedString(target, "target"),
+                checkedString(outputName, "output_name"));
     });
 }
 
@@ -203,6 +241,32 @@ FFB_API int ffb_texture_height(void* handle)
     }
 }
 
+FFB_API int ffb_projection_texture_width(void* handle)
+{
+    try
+    {
+        return checkedHandle(handle)->projectionTextureWidth();
+    }
+    catch (...)
+    {
+        failWithCurrentException();
+        return 0;
+    }
+}
+
+FFB_API int ffb_projection_texture_height(void* handle)
+{
+    try
+    {
+        return checkedHandle(handle)->projectionTextureHeight();
+    }
+    catch (...)
+    {
+        failWithCurrentException();
+        return 0;
+    }
+}
+
 FFB_API int ffb_domain_extent(void* handle, double* output)
 {
     return runChecked([&] {
@@ -211,6 +275,21 @@ FFB_API int ffb_domain_extent(void* handle, double* output)
             throw std::invalid_argument("domain extent output must not be null");
         }
         const auto& extent = checkedHandle(handle)->domainExtent();
+        output[0] = extent[0];
+        output[1] = extent[1];
+        output[2] = extent[2];
+        output[3] = extent[3];
+    });
+}
+
+FFB_API int ffb_projection_extent(void* handle, double* output)
+{
+    return runChecked([&] {
+        if (output == nullptr)
+        {
+            throw std::invalid_argument("projection extent output must not be null");
+        }
+        const auto& extent = checkedHandle(handle)->projectionExtent();
         output[0] = extent[0];
         output[1] = extent[1];
         output[2] = extent[2];

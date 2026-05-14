@@ -99,19 +99,24 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         output_dir = pathlib.Path(tmp)
         builder = FlowFieldBuilder(output_dir)
-        builder.set_domain_from_arrays(xs, ys)
+        builder.set_domain_from_arrays(xs, ys, source_epsg=4326)
+        assert not hasattr(builder, "set_source_epsg")
         builder.set_quikgrid_options(density_ratio=150)
         builder.set_texture_size(2, 2)
+        builder.set_projection_texture_size(2, 1)
 
         result = builder.build_uv_texture(us, vs, "step")
         assert result is None
         assert builder.texture_size == (2, 2)
         assert builder.domain_extent == (0.0, 0.0, 1.0, 1.0)
+        assert builder.projection_texture_size == (2, 1)
 
         uv_path = pathlib.Path(builder.uv_texture_path("step"))
         seed_path = pathlib.Path(builder.seed_texture_path("step"))
+        projection_path = pathlib.Path(builder.projection_texture_path("epsg4326"))
         assert uv_path == output_dir / "uv_step.png"
         assert seed_path == output_dir / "seed_step.png"
+        assert projection_path == output_dir / "projection_epsg4326.png"
 
         uv_width, uv_height, uv_rows = _read_rgba_png(uv_path)
         assert (uv_width, uv_height) == (4, 2)
@@ -124,6 +129,17 @@ def main():
         assert (seed_width, seed_height) == (2, 2)
         assert _seed(_pixel(seed_rows, 0, 1)) == (0, 0)
         assert _seed(_pixel(seed_rows, 1, 0)) == (1, 1)
+
+        projection_result = builder.build_projection_texture(4326, "epsg4326")
+        assert projection_result is None
+        assert builder.projection_extent == (0.0, 0.0, 1.0, 1.0)
+
+        projection_width, projection_height, projection_rows = _read_rgba_png(projection_path)
+        assert (projection_width, projection_height) == (4, 1)
+        assert _float32(_pixel(projection_rows, 0, 0)) == 0.25
+        assert _float32(_pixel(projection_rows, 1, 0)) == 0.5
+        assert _float32(_pixel(projection_rows, 2, 0)) == 0.75
+        assert _float32(_pixel(projection_rows, 3, 0)) == 0.5
 
         builder.close()
         try:
